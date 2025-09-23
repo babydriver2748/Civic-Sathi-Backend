@@ -1,12 +1,14 @@
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Form
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Form, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+import datetime ## edited
 from datetime import timedelta
 import shutil
 from typing import List
-
-# --- THIS IS THE FIX: Import CORSMiddleware ---
 from fastapi.middleware.cors import CORSMiddleware
+# --- THIS IS THE FIX: Import StaticFiles ---
+from fastapi.staticfiles import StaticFiles
+import os
 
 from . import models, schemas, crud, auth
 from .database import engine, get_db
@@ -15,14 +17,21 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Civic Sathi API")
 
-# --- THIS IS THE FIX: Add the CORS Middleware ---
-# This tells your backend to accept requests from any origin (like your mobile app).
+# --- THIS IS THE FIX: Create the 'uploads' directory if it doesn't exist ---
+# This ensures the folder is there when the app starts.
+os.makedirs("uploads", exist_ok=True)
+
+# --- THIS IS THE FIX: Mount the 'uploads' directory as a static path ---
+# This makes any file inside the 'uploads' folder publicly accessible.
+# The URL will be your_base_url/uploads/filename.jpg
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -38,6 +47,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not find user")
     return user
 
+# ... (The register and login endpoints remain unchanged) ...
 @app.post("/users/register/", response_model=schemas.User)
 def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     if user.email:
@@ -64,8 +74,11 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
     access_token = auth.create_access_token(data={"sub": subject}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer", "user_full_name": user.full_name}
 
+
+# --- THIS IS THE UPDATED ISSUE REPORTING ENDPOINT ---
 @app.post("/issues/report/", response_model=schemas.Issue)
 def create_new_issue(
+    request: Request, # Add the request object to get the base URL
     description: str = Form(...),
     department: str = Form(...),
     latitude: float = Form(...),
@@ -75,13 +88,39 @@ def create_new_issue(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    photo_path = f"uploads/{photo.filename}"
-    with open(photo_path, "wb") as buffer: shutil.copyfileobj(photo.file, buffer)
-    audio_path = f"uploads/{audio.filename}"
-    with open(audio_path, "wb") as buffer: shutil.copyfileobj(audio.file, buffer)
-    issue_data = schemas.IssueCreate(description=description, department=department, latitude=latitude, longitude=longitude)
-    return crud.create_issue(db=db, issue=issue_data, user_id=current_user.id, photo_path=photo_path, audio_path=audio_path)
+    # Save the files with unique names to prevent overwrites
+    photo_filename = f"{current_user.id}_{int(datetime.now().timestamp())}_{photo.filename}"
+    photo_path = f"uploads/{photo_filename}"
+    with open(photo_path, "wb") as buffer:
+        shutil.copyfileobj(photo.file, buffer)
 
+    audio_filename = f"{current_user.id}_{int(datetime.now().timestamp())}_{audio.filename}"
+    audio_path = f"uploads/{audio_filename}"
+    with open(audio_path, "wb") as buffer:
+        shutil.copyfileobj(audio.file, buffer)
+
+    # --- THIS IS THE FIX: Construct the full, public URL ---
+    base_url = str(request.base_url)
+    full_photo_url = f"{base_url}{photo_path}"
+    full_audio_url = f"{base_url}{audio_path}"
+
+    issue_data = schemas.IssueCreate(
+        description=description,
+        department=department,
+        latitude=latitude,
+        longitude=longitude
+    )
+    
+    # Save the full URLs to the database, not the local paths
+    return crud.create_issue(
+        db=db, 
+        issue=issue_data, 
+        user_id=current_user.id, 
+        photo_path=full_photo_url,
+        audio_path=full_audio_url
+    )
+
+# ... (The get_user_issues and read_root endpoints remain the same) ...
 @app.get("/issues/my-issues/", response_model=List[schemas.Issue])
 def get_user_issues(
     db: Session = Depends(get_db),
