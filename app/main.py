@@ -1,13 +1,13 @@
 from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile, Form, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import timedelta, datetime
 import shutil
 from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 import os
-# --- THIS IS THE FIX: We import the 'datetime' class specifically ---
-from datetime import datetime
+# --- THIS IS THE FIX: Import StaticFiles from FastAPI ---
+from fastapi.staticfiles import StaticFiles
 
 from . import models, schemas, crud, auth
 from .database import engine, get_db
@@ -16,7 +16,11 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Civic Sathi API")
 
+# This ensures the 'uploads' directory exists when the app starts.
 os.makedirs("uploads", exist_ok=True)
+
+# This line will now work because we have imported StaticFiles.
+# It makes any file inside the 'uploads' folder publicly accessible.
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
@@ -28,6 +32,8 @@ app.add_middleware(
 )
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# --- The rest of the file is correct and remains the same ---
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     username = auth.decode_access_token(token)
@@ -78,7 +84,6 @@ def create_new_issue(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # --- THIS CODE NOW WORKS because 'datetime' is imported correctly ---
     photo_filename = f"{current_user.id}_{int(datetime.now().timestamp())}_{photo.filename}"
     photo_path = f"uploads/{photo_filename}"
     with open(photo_path, "wb") as buffer:
